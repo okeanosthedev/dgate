@@ -409,30 +409,30 @@ func ResolveStatusResponse(
 }
 
 func fetchStatus(
-	log logr.Logger,
-	conn net.Conn,
-	protocol proto.Protocol,
-	statusRequestCtx *proto.PacketContext,
+    log logr.Logger,
+    conn net.Conn,
+    protocol proto.Protocol,
+    statusRequestCtx *proto.PacketContext,
 ) (*packet.StatusResponse, error) {
-	if err := writePacket(conn, statusRequestCtx); err != nil {
-		return nil, fmt.Errorf("failed to write status request packet to backend: %w", err)
-	}
+    if err := writePacket(conn, statusRequestCtx); err != nil {
+        return nil, fmt.Errorf("failed to write status request packet to backend: %w", err)
+    }
 
-	dec := codec.NewDecoder(conn, proto.ClientBound, log.V(2))
-	dec.SetProtocol(protocol)
-	dec.SetState(state.Status)
+    dec := codec.NewDecoder(conn, proto.ClientBound, log.V(2))
+    dec.SetProtocol(protocol)
+    dec.SetState(state.Status)
 
-	pongCtx, err := dec.Decode()
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode status response: %w", err)
-	}
+    pongCtx, err := dec.Decode()
+    if err != nil {
+        return nil, fmt.Errorf("failed to decode status response: %w", err)
+    }
 
-	res, ok := pongCtx.Packet.(*packet.StatusResponse)
-	if !ok {
-		return nil, fmt.Errorf("received unexpected response: %s, expected %T", pongCtx, res)
-	}
+    res, ok := pongCtx.Packet.(*packet.StatusResponse)
+    if !ok {
+        return nil, fmt.Errorf("received unexpected response: %s, expected %T", pongCtx, res)
+    }
 
-	return res, nil
+    return res, nil
 }
 
 // withLoader returns a ttlcache option that uses the given load function to load a value for a key
