@@ -329,73 +329,83 @@ type pingResult struct {
 	err error
 }
 
-func resolveStatusResponse(
-	src net.Conn,
-	dialTimeout time.Duration,
-	backendAddr string,
-	route *config.Route,
-	log logr.Logger,
-	client netmc.MinecraftConn,
-	handshake *packet.Handshake,
-	handshakeCtx *proto.PacketContext,
-	statusRequestCtx *proto.PacketContext,
+func ResolveStatusResponse(
+    dialTimeout time.Duration,
+    routes []config.Route,
+    log logr.Logger,
+    client netmc.MinecraftConn,
+    handshake *packet.Handshake,
+    handshakeCtx *proto.PacketContext,
+    statusRequestCtx *proto.PacketContext,
 ) (logr.Logger, *packet.StatusResponse, error) {
-	key := pingKey{backendAddr, proto.Protocol(handshake.ProtocolVersion)}
+    log, src, route, nextBackend, err := findRoute(routes, log, client, handshake)
+    if err != nil {
+        return log, nil, err
+    }
 
-	// fast path: use cache without loader
-	if route.CachePingEnabled() {
-		item := pingCache.Get(key)
-		if item != nil {
-			log.V(1).Info("returning cached status result")
-			val := item.Value()
-			return log, val.res, val.err
-		}
-	}
+    log, res, err := tryBackends(nextBackend, func(log logr.Logger, backendAddr string) (logr.Logger, *packet.StatusResponse, error) {
+        return resolveStatusResponse(src, dialTimeout, backendAddr, route, log, client, handshake, handshakeCtx, statusRequestCtx)
+    })
+    if err != nil && route.Fallback != nil {
+        log.Info("failed to resolve status response, will use fallback status response", "error", err)
 
-	// slow path: load cache, block many requests to same route
-	//
-	// resolve ping of remote backend, cache and return it.
-	// if more ping requests arrive at slow path for the same route
-	// the ping result of the first original request is returned to
-	// ensure a single connection per route for fetching the status
-	// while allowing many ping requests
+        // Fallback status response if configured
+        fallbackPong, err := route.Fallback.Response(handshakeCtx.Protocol)
+        if err != nil {
+            log.Info("failed to get fallback status response", "error", err)
+        }
+        if fallbackPong != nil {
+            status, err2 := json.Marshal(fallbackPong)
+            if err2 != nil {
+                return log, nil, fmt.Errorf("%w: failed to marshal fallback status response: %w", err, err2)
+            }
+            if log.V(1).Enabled() {
+                log.V(1).Info("using fallback status response", "status", string(status))
+            }
 
-	load := func(ctx context.Context) (*packet.StatusResponse, error) {
-		log.V(1).Info("resolving status")
+            // Update the fallback status response with ShowMaxPlayers
+            var statusResponse struct {
+                Players struct {
+                    Max int `json:"max"`
+                } `json:"players"`
+            }
+            if err := json.Unmarshal(status, &statusResponse); err == nil {
+                statusResponse.Players.Max = route.Fallback.ShowMaxPlayers
+                updatedStatus, err := json.Marshal(statusResponse)
+                if err == nil {
+                    return log, &packet.StatusResponse{Status: string(updatedStatus)}, nil
+                }
+            }
+        }
+    }
 
-		ctx = logr.NewContext(ctx, log)
-		dst, err := dialRoute(ctx, dialTimeout, src.RemoteAddr(), route, backendAddr, handshake, handshakeCtx, route.CachePingEnabled())
-		if err != nil {
-			return nil, fmt.Errorf("failed to dial route: %w", err)
-		}
-		defer func() { _ = dst.Close() }()
+    // If MaxPlayers is set for the backend, update the status response
+    if len(route.MaxPlayers) > 0 {
+        for i, backend := range route.Backend {
+            if backend == backendAddr {
+                if i < len(route.MaxPlayers) {
+                    maxPlayers := route.MaxPlayers[i]
+                    if res != nil {
+                        var statusResponse struct {
+                            Players struct {
+                                Max int `json:"max"`
+                            } `json:"players"`
+                        }
+                        if err := json.Unmarshal([]byte(res.Status), &statusResponse); err == nil {
+                            statusResponse.Players.Max = maxPlayers
+                            updatedStatus, err := json.Marshal(statusResponse)
+                            if err == nil {
+                                res.Status = string(updatedStatus)
+                            }
+                        }
+                    }
+                }
+                break
+            }
+        }
+    }
 
-		log = log.WithValues("backendAddr", netutil.Host(dst.RemoteAddr()))
-		return fetchStatus(log, dst, handshakeCtx.Protocol, statusRequestCtx)
-	}
-
-	if !route.CachePingEnabled() {
-		res, err := load(client.Context())
-		return log, res, err
-	}
-
-	opt := withLoader(sfg, route.GetCachePingTTL(), func(key pingKey) *pingResult {
-		res, err := load(context.Background())
-		return &pingResult{res: res, err: err}
-	})
-
-	resultChan := make(chan *pingResult, 1)
-	go func() { resultChan <- pingCache.Get(key, opt).Value() }()
-
-	select {
-	case result := <-resultChan:
-		return log, result.res, result.err
-	case <-client.Context().Done():
-		return log, nil, &errs.VerbosityError{
-			Err:       context.Cause(client.Context()),
-			Verbosity: 1,
-		}
-	}
+    return log, res, err
 }
 
 func fetchStatus(
