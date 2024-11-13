@@ -76,62 +76,13 @@ func tryBackends[T any](next nextBackendFunc, try func(log logr.Logger, backendA
 
 		log, t, err := try(log, backendAddr)
 		if err != nil {
-			// Check if the error is due to the server being full
-			if isServerFullError(err) {
-				log.Info("server is full, skipping", "backendAddr", backendAddr)
-				continue
-			}
 			errs.V(log, err).Info("failed to try backend", "error", err)
 			continue
 		}
 		return log, t, nil
 	}
 }
-func isServerFull(conn net.Conn) bool {
-	statusRequestCtx := &proto.PacketContext{
-		PacketID: packet.StatusRequestPacketID,
-		Payload:  []byte{},
-	}
 
-	if err := writePacket(conn, statusRequestCtx); err != nil {
-		// If we can't send the status request, assume the server is not full
-		return false
-	}
-
-	// Read the status response from the server
-	dec := codec.NewDecoder(conn, proto.ClientBound, logr.Discard())
-	dec.SetProtocol(proto.Protocol(handshake.ProtocolVersion))
-	dec.SetState(state.Status)
-
-	pongCtx, err := dec.Decode()
-	if err != nil {
-		// If we can't decode the status response, assume the server is not full
-		return false
-	}
-
-	// Check if the response is a StatusResponse packet
-	res, ok := pongCtx.Packet.(*packet.StatusResponse)
-	if !ok {
-		// If the response is not a StatusResponse packet, assume the server is not full
-		return false
-	}
-
-	// Parse the JSON response to get the player count and max players
-	var statusResponse struct {
-		Players struct {
-			Online int `json:"online"`
-			Max    int `json:"max"`
-		} `json:"players"`
-	}
-
-	if err := json.Unmarshal([]byte(res.Status), &statusResponse); err != nil {
-		// If we can't parse the JSON, assume the server is not full
-		return false
-	}
-
-	// Check if the server is full
-	return statusResponse.Players.Online >= statusResponse.Players.Max
-}
 func emptyReadBuff(src netmc.MinecraftConn, dst net.Conn) error {
 	buf, ok := src.(interface{ ReadBuffered() ([]byte, error) })
 	if ok {
