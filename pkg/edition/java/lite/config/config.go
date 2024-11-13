@@ -34,6 +34,7 @@ type (
 		// Deprecated: use TCPShieldRealIP instead.
 		RealIP            bool `json:"realIP,omitempty" yaml:"realIP,omitempty"`
 		TCPShieldRealIP   bool `json:"tcpShieldRealIP,omitempty" yaml:"tcpShieldRealIP,omitempty"`
+		MaxPlayers        int  `json:"maxPlayers,omitempty" yaml:"maxPlayers,omitempty"`
 		ModifyVirtualHost bool `json:"modifyVirtualHost,omitempty" yaml:"modifyVirtualHost,omitempty"`
 	}
 	Status struct {
