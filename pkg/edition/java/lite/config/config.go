@@ -47,14 +47,18 @@ type (
 )
 
 // Response returns the configured status response.
-func (s *Status) Response(proto.Protocol) (*ping.ServerPing, error) {
-	return &ping.ServerPing{
-		Version:     s.Version,
-		Description: s.MOTD.T(),
-		Favicon:     s.Favicon,
-		ModInfo:     &s.ModInfo,
-	}, nil
+func (s *Status) Response(protocol proto.Protocol) (*ping.ServerPing, error) {
+    return &ping.ServerPing{
+        Version:     s.Version,
+        Description: s.MOTD.T(),
+        Favicon:     s.Favicon,
+        ModInfo:     &s.ModInfo,
+        Players: &ping.Players{
+            Max: s.ShowMaxPlayers,
+        },
+    }, nil
 }
+
 
 // GetCachePingTTL returns the configured ping cache TTL or a default duration if not set.
 func (r *Route) GetCachePingTTL() time.Duration {
