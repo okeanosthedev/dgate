@@ -42,6 +42,7 @@ type (
 		Version ping.Version              `yaml:"version,omitempty" json:"version,omitempty"`
 		Favicon favicon.Favicon           `yaml:"favicon,omitempty" json:"favicon,omitempty"`
 		ModInfo modinfo.ModInfo           `yaml:"modInfo,omitempty" json:"modInfo,omitempty"`
+		ShowMaxPlayers int                `yaml:"showMaxPlayers,omitempty" json:"showMaxPlayers,omitempty"`
 	}
 )
 
