@@ -6,18 +6,24 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 )
 
+type BlacklistEntry struct {
+	IP        string    `json:"ip"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
 type Blacklist struct {
-	IPs  []string `json:"ips"`
-	mu   sync.RWMutex
-	file string
+	Entries []BlacklistEntry `json:"entries"`
+	mu      sync.RWMutex
+	file    string
 }
 
 func NewBlacklist(file string) (*Blacklist, error) {
 	bl := &Blacklist{
-		IPs:  []string{},
-		file: file,
+		Entries: []BlacklistEntry{},
+		file:    file,
 	}
 	err := bl.Load()
 	if err != nil {
@@ -39,30 +45,11 @@ func (bl *Blacklist) Load() error {
 		return err
 	}
 
-	var temp struct {
-		IPs []string `json:"ips"`
-	}
-
-	err = json.Unmarshal(data, &temp)
-	if err != nil {
-		return err
-	}
-
-	bl.IPs = temp.IPs
-	return nil
+	return json.Unmarshal(data, bl)
 }
 
 func (bl *Blacklist) Save() error {
-	bl.mu.Lock()
-	defer bl.mu.Unlock()
-
-	temp := struct {
-		IPs []string `json:"ips"`
-	}{
-		IPs: bl.IPs,
-	}
-
-	data, err := json.MarshalIndent(temp, "", "  ")
+	data, err := json.MarshalIndent(bl, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -70,7 +57,7 @@ func (bl *Blacklist) Save() error {
 	return os.WriteFile(bl.file, data, 0644)
 }
 
-func (bl *Blacklist) Add(ip string) error {
+func (bl *Blacklist) Add(ip string, duration time.Duration) error {
 	if net.ParseIP(ip) == nil {
 		return fmt.Errorf("invalid IP address: %s", ip)
 	}
@@ -78,48 +65,30 @@ func (bl *Blacklist) Add(ip string) error {
 	bl.mu.Lock()
 	defer bl.mu.Unlock()
 
-	for _, existingIP := range bl.IPs {
-		if existingIP == ip {
-			return nil // IP already in the list
+	expiresAt := time.Time{}
+	if duration > 0 {
+		expiresAt = time.Now().Add(duration)
+	}
+
+	for i, entry := range bl.Entries {
+		if entry.IP == ip {
+			bl.Entries[i].ExpiresAt = expiresAt
+			return bl.Save()
 		}
 	}
 
-	bl.IPs = append(bl.IPs, ip)
-
-	temp := struct {
-		IPs []string `json:"ips"`
-	}{
-		IPs: bl.IPs,
-	}
-
-	data, err := json.MarshalIndent(temp, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(bl.file, data, 0644)
+	bl.Entries = append(bl.Entries, BlacklistEntry{IP: ip, ExpiresAt: expiresAt})
+	return bl.Save()
 }
 
 func (bl *Blacklist) Remove(ip string) error {
 	bl.mu.Lock()
 	defer bl.mu.Unlock()
 
-	for i, existingIP := range bl.IPs {
-		if existingIP == ip {
-			bl.IPs = append(bl.IPs[:i], bl.IPs[i+1:]...)
-			
-			temp := struct {
-				IPs []string `json:"ips"`
-			}{
-				IPs: bl.IPs,
-			}
-
-			data, err := json.MarshalIndent(temp, "", "  ")
-			if err != nil {
-				return err
-			}
-
-			return os.WriteFile(bl.file, data, 0644)
+	for i, entry := range bl.Entries {
+		if entry.IP == ip {
+			bl.Entries = append(bl.Entries[:i], bl.Entries[i+1:]...)
+			return bl.Save()
 		}
 	}
 
@@ -130,9 +99,12 @@ func (bl *Blacklist) Contains(ip string) bool {
 	bl.mu.RLock()
 	defer bl.mu.RUnlock()
 
-	for _, existingIP := range bl.IPs {
-		if existingIP == ip {
-			return true
+	now := time.Now()
+	for _, entry := range bl.Entries {
+		if entry.IP == ip {
+			if entry.ExpiresAt.IsZero() || entry.ExpiresAt.After(now) {
+				return true
+			}
 		}
 	}
 	return false
@@ -142,6 +114,31 @@ func (bl *Blacklist) GetIPs() []string {
 	bl.mu.RLock()
 	defer bl.mu.RUnlock()
 
-	return append([]string{}, bl.IPs...)
+	var ips []string
+	now := time.Now()
+	for _, entry := range bl.Entries {
+		if entry.ExpiresAt.IsZero() || entry.ExpiresAt.After(now) {
+			ips = append(ips, entry.IP)
+		}
+	}
+	return ips
+}
+
+func (bl *Blacklist) Cleanup() {
+	bl.mu.Lock()
+	defer bl.mu.Unlock()
+
+	now := time.Now()
+	newEntries := make([]BlacklistEntry, 0, len(bl.Entries))
+	for _, entry := range bl.Entries {
+		if entry.ExpiresAt.IsZero() || entry.ExpiresAt.After(now) {
+			newEntries = append(newEntries, entry)
+		}
+	}
+
+	if len(newEntries) < len(bl.Entries) {
+		bl.Entries = newEntries
+		_ = bl.Save() // Ignore error as this is a background operation
+	}
 }
 

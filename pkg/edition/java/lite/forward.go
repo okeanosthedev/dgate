@@ -121,7 +121,35 @@ func InitBlacklist(globalBlacklistPath, routeBlacklistPath string) error {
 
 	go watchBlacklistFiles(globalBlacklistPath, routeBlacklistPath)
 
+	// Start a goroutine to periodically clean up expired entries
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			globalBlacklist.Cleanup()
+		}
+	}()
+
 	return nil
+}
+
+func startBlacklistCleanup() {
+	ticker := time.NewTicker(30 * time.Minute)
+	go func() {
+		for range ticker.C {
+			logger.Info("Starting blacklist cleanup")
+			if globalBlacklist != nil {
+				globalBlacklist.Cleanup()
+				logger.Info("Global blacklist cleanup completed")
+			}
+			if routeBlacklist != nil {
+				// Note: RouteBlacklist doesn't have a Cleanup method, 
+				// so we don't clean it up here. You may want to implement
+				// a similar method for RouteBlacklist if needed.
+				logger.Info("Route blacklist cleanup not implemented")
+			}
+		}
+	}()
 }
 
 func watchBlacklistFiles(globalBlacklistPath, routeBlacklistPath string) {
@@ -134,20 +162,20 @@ func watchBlacklistFiles(globalBlacklistPath, routeBlacklistPath string) {
 			if event.Op&fsnotify.Write == fsnotify.Write {
 				switch event.Name {
 				case globalBlacklistPath:
-					logger.Info("Global blacklist file modified, reloading...")
+					//logger.Info("Global blacklist file modified, reloading...")
 					err := globalBlacklist.Load()
 					if err != nil {
 						logger.Error(err, "Failed to reload global blacklist")
 					} else {
-						logger.Info("Global blacklist reloaded successfully")
+						//logger.Info("Global blacklist reloaded successfully")
 					}
 				case routeBlacklistPath:
-					logger.Info("Route blacklist file modified, reloading...")
+					//logger.Info("Route blacklist file modified, reloading...")
 					err := routeBlacklist.Load()
 					if err != nil {
 						logger.Error(err, "Failed to reload route blacklist")
 					} else {
-						logger.Info("Route blacklist reloaded successfully")
+						//logger.Info("Route blacklist reloaded successfully")
 					}
 				}
 			}
@@ -186,9 +214,9 @@ func Forward(
 
 	// Check if the IP is blacklisted
 	if isIPBlacklisted(clientIP, route) {
-		log.Info("connection denied due to blacklisted IP",
-			"clientIP", clientIP,
-			"route", route.Host[0])
+		//log.Info("connection denied due to blacklisted IP",
+		//	"clientIP", clientIP,
+		//	"route", route.Host[0])
 		return
 	}
 
@@ -197,10 +225,10 @@ func Forward(
 	if route.MaxConnections > 0 {
 		currentCount := connectionCountManager.GetCount(routeKey)
 		if currentCount >= route.MaxConnections {
-			log.Info("connection denied due to max connections reached",
-				"route", routeKey,
-				"maxConnections", route.MaxConnections,
-				"currentConnections", currentCount)
+			//log.Info("connection denied due to max connections reached",
+			//	"route", routeKey,
+			//	"maxConnections", route.MaxConnections,
+			//	"currentConnections", currentCount)
 			return
 		}
 	}
@@ -329,17 +357,13 @@ func findRoute(
 	src = srcConn.Conn()
 
 	clearedHost := ClearVirtualHost(handshake.ServerAddress)
-	log = log.WithName("lite").WithValues(
-		"clientAddr", netutil.Host(src.RemoteAddr()),
-		"virtualHost", clearedHost,
-		"protocol", proto.Protocol(handshake.ProtocolVersion).String(),
-	)
+	log = log.WithName("lite")
 
 	host, route := FindRoute(clearedHost, routes...)
 	if route == nil {
 		return log.V(1), src, nil, nil, fmt.Errorf("no route configured for host %s", clearedHost)
 	}
-	log = log.WithValues("route", host)
+	//log = log.WithValues("route", host) //Removed as per update
 
 	if len(route.Backend) == 0 {
 		return log, src, route, nil, errors.New("no backend configured for route")
@@ -592,6 +616,9 @@ func init() {
 	if err != nil {
 		logger.Error(err, "Failed to initialize blacklists")
 	}
+
+	// Start the blacklist cleanup process
+	startBlacklistCleanup()
 }
 
 type pingKey struct {
